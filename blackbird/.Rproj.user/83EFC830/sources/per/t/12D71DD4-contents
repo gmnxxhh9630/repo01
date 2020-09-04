@@ -1,0 +1,76 @@
+library(DBI)
+library(RMySQL)
+library(data.table)
+library(rJava)
+library(RJDBC)
+library(timeDate)
+library(lubridate)
+library(RODBC)
+library(mailR)
+library(readxl)
+library(zip)
+library(openxlsx)
+library(readr)
+
+
+minaname  <- 'minagao'
+minapw <- 'gmn#9797'
+minamail <- 'minagao@51talk.com'
+yesterday_date <- format(Sys.Date() - 1,"%Y%m%d")
+mail_subject <- paste0('新黑鸟绑定率',yesterday_date)
+mail_body <- '请查收截止到昨天的新黑鸟绑定率数据(周一周四自动发送)。新黑鸟绑定率:绑定新黑鸟有效学员数/总有效学员数。'
+mail_recevier <- c('minagao@51talk.com')
+mail_cc <- c('minagao@51talk.com')
+file_path_team <- paste0('D:/newblackbirdrate/',mail_subject,'team.csv')
+
+cp <- dir("D:/paaa/lianjiehive",full.names = TRUE)
+.jinit(classpath=cp) 
+
+
+options( java.parameters = "-Xmx16g" )
+drv <- JDBC("org.apache.hive.jdbc.HiveDriver", "D:/paaa/lianjiehive/hive-jdbc-1.1.1.jar")
+
+hiveConn <- dbConnect(drv, "jdbc:hive2://10.0.3.18:10000/default",minaname, minapw)
+
+
+dat_team <- dbGetQuery(hiveConn,paste0("
+select date_format(date_sub(current_date(),1),'MM-dd') as dt,tt.region,tt.group_name,tt.validstu,tt.newblackbird,
+concat(substr(tt.newblackbird/tt.validstu * 100,0,4),'%') as rate
+from (
+select t2.region,group_name,
+count(distinct user_id) as validstu,
+count(distinct case when black_bird_wechat_status in (2,3) then user_id end) as newblackbird
+from dm_bi.dm_user_fact_clever_crm_ss_detail_new t1
+left join sale_org_structure.shda_saleinfo t2 on t1.group_name = t2.crm_group
+where dt = 202006 and point_count > 0 and ext_valid_end >= unix_timestamp(date_sub(current_date(),1),'yyyy-MM-dd')
+and t2.dep = 'SS' and t2.crm_group not in ('BJIS_新兵营','BJIS_管理组','SS&CST新兵营','武汉SS!CST新兵营','SHIS_新兵营')
+group by t2.region,group_name) tt
+order by tt.newblackbird/tt.validstu desc
+"))
+
+dat_team <- setnames(dat_team,c('日期','大区','组别','有效学员数','绑定新黑鸟学员数','新黑鸟绑定率'))
+write_excel_csv(dat_team,path = file_path_team)
+
+
+  
+send.mail(from = minamail,  
+          to = mail_recevier,                
+          cc = mail_cc,                  
+          subject = sprintf(mail_subject),          
+          body = paste('<font size="3">','Dear all:','</font><br>',
+                       '<font size="3">',mail_body,'</font>'),
+          html = T,
+          encoding = 'utf-8', 
+          inline = TRUE,
+          smtp = list(host.name = "mail.51talk.com", port = 25, 
+                      user.name = minaname, passwd = minapw, ssl = FALSE),   
+          authenticate = TRUE,
+          send = TRUE,
+          debug=FALSE,
+          attach.files= c(file_path_team))  
+
+dbDisconnect(hiveConn)
+
+
+
+

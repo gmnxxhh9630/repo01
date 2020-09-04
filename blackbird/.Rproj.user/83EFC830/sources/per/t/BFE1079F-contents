@@ -1,0 +1,104 @@
+library(DBI)
+library(RMySQL)
+library(data.table)
+library(rJava)
+library(RJDBC)
+library(timeDate)
+library(lubridate)
+library(RODBC)
+library(mailR)
+library(readxl)
+library(zip)
+library(openxlsx)
+library(readr)
+library(xlsx)
+
+
+minaname  <- 'minagao'
+minapw <- 'gmn#9797'
+minamail <- 'minagao@51talk.com'
+yesterday_date <- format(Sys.Date() - 1,"%Y%m%d")
+mail_subject <- paste0('新黑鸟绑定率',yesterday_date)
+mail_body_01 <- '请查收截止到昨天的新黑鸟绑定率数据(周一周四自动发送)。'
+mail_body_02 <- '新黑鸟绑定率：绑定新黑鸟的有效学员数/有效学员数。'
+mail_body_03 <- '附件中可分别查看小组和个人维度数据。'
+mail_recevier <- c('minagao@51talk.com','helenhuang@51talk.com','zhangyan09@51talk.com','xuehui@51talk.com','lihaihu@51talk.com','xiaqiuye@51talk.com','liushuang01@51talk.com','zhangyuanyuan03@51talk.com','vivisawu@51talk.com','jasminefeng@51talk.com','lillianwang@51talk.com','liuyaqin@51talk.com','zhangpeng@51talk.com','xuanyu@51talk.com','kayleeli@51talk.com','jackyzheng@51talk.com','oliviayang@51talk.com','donghaideng@51talk.com','annezeng@51talk.com','nikiyang@51talk.com','adama@51talk.com','susanwu@51talk.com','yuemeng@51talk.com','mengqingge@51talk.com','yanghui@51talk.com','maxiaoyu@51talk.com','bjqsss_leader@51talk.com','wuchuan@51talk.com','bjss&cst-leaders@51talk.com','SHHQSSTL@51talk.com','WHHQSSTL@51talk.com','whcsttl@51talk.com','aronouyang@51talk.com')
+mail_cc <- c('lilili01@51talk.com','reneeliu01@51talk.com','zengkan@51talk.com','shhqda@51talk.com','xiaodongkang@51talk.com','hdyy@51talk.com','maybelleli@51talk.com','lihaomei@51talk.com','mengyanzhi@51talk.com','wangxin98@51talk.com','jiangzhouqing@51talk.com')
+file_path <- paste0('D:/newblackbirdrate/',mail_subject,'.xlsx')
+
+cp <- dir("D:/paaa/lianjiehive",full.names = TRUE)
+.jinit(classpath=cp) 
+
+
+options( java.parameters = "-Xmx16g" )
+drv <- JDBC("org.apache.hive.jdbc.HiveDriver", "D:/paaa/lianjiehive/hive-jdbc-1.1.1.jar")
+
+hiveConn <- dbConnect(drv, "jdbc:hive2://10.0.3.18:10000/default",minaname, minapw)
+
+
+dat_team <- dbGetQuery(hiveConn,paste0("
+select date_format(date_sub(current_date(),1),'MM-dd') as dt,tt.region,tt.group_name,tt.validstu,tt.newblackbird,
+concat(substr(tt.newblackbird/tt.validstu * 100,0,4),'%') as rate
+from (
+select t2.region,group_name,
+count(distinct user_id) as validstu,
+count(distinct case when black_bird_wechat_status in (2,3) then user_id end) as newblackbird
+from dm_bi.dm_user_fact_clever_crm_ss_detail_new t1
+left join sale_org_structure.shda_saleinfo t2 on t1.group_name = t2.crm_group
+where dt = 202006 and point_count > 0 and ext_valid_end >= unix_timestamp(date_sub(current_date(),1),'yyyy-MM-dd')
+and t2.dep = 'SS' and t2.crm_group not in ('BJIS_新兵营','BJIS_管理组','SS&CST新兵营','武汉SS!CST新兵营','SHIS_新兵营')
+group by t2.region,group_name) tt
+order by tt.newblackbird/tt.validstu desc
+"))
+
+dat_team <- setnames(dat_team,c('日期','大区','组别','有效学员数','绑定新黑鸟学员数','新黑鸟绑定率'))
+
+
+dat_ss <- dbGetQuery(hiveConn,paste0("
+select date_format(date_sub(current_date(),1),'MM-dd') as dt,tt.region,tt.group_name,tt.user_name,tt.validstu,tt.newblackbird,
+concat(substr(tt.newblackbird/tt.validstu * 100,0,4),'%') as rate
+from (
+select t2.region,t1.group_name,t3.user_name,
+count(distinct user_id) as validstu,
+count(distinct case when black_bird_wechat_status in (2,3) then user_id end) as newblackbird
+from dm_bi.dm_user_fact_clever_crm_ss_detail_new t1
+left join sale_org_structure.shda_saleinfo t2 on t1.group_name = t2.crm_group
+left join dwd.dwd_staff_dim_staff_base t3 on t1.ss_id = t3.id
+where dt = 202006 and point_count > 0 and ext_valid_end >= unix_timestamp(date_sub(current_date(),1),'yyyy-MM-dd')
+and t2.dep = 'SS' and t2.crm_group not in ('BJIS_新兵营','BJIS_管理组','SS&CST新兵营','武汉SS!CST新兵营','SHIS_新兵营')
+group by t2.region,t1.group_name,t3.user_name) tt
+order by tt.newblackbird/tt.validstu desc
+"))
+
+dat_ss <- setnames(dat_ss,c('日期','大区','组别','ss','有效学员数','绑定新黑鸟学员数','新黑鸟绑定率'))
+
+wb <- createWorkbook()
+sheet1 = createSheet(wb,"by_team")
+addDataFrame(dat_team, sheet=sheet1,startColumn=1,row.names=FALSE)
+sheet2 = createSheet(wb, "by_ss")
+addDataFrame(dat_ss, sheet=sheet2, startColumn=1, row.names=FALSE)
+
+saveWorkbook(wb,file_path)
+dbDisconnect(hiveConn)
+
+send.mail(from = minamail,  
+          to = mail_recevier,                
+          cc = mail_cc,                  
+          subject = sprintf(mail_subject),          
+          body = paste('<font size="3">','Dear all:','</font><br>',
+                       '<font size="3">',mail_body_01,'</font><br>',
+                       '<font size="3">',mail_body_02,'</font><br>',
+                       '<font size="3">',mail_body_03),
+          html = T,
+          encoding = 'utf-8', 
+          inline = TRUE,
+          smtp = list(host.name = "mail.51talk.com", port = 25, 
+                      user.name = minaname, passwd = minapw, ssl = FALSE),   
+          authenticate = TRUE,
+          send = TRUE,
+          debug=FALSE,
+          attach.files= c(file_path))
+
+
+
+
